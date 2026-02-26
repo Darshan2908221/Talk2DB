@@ -17,7 +17,7 @@ from datetime import datetime, date
 import asyncio
 import time
 
-async def get_data(session:AsyncSession, mysql_query:str):
+async def get_data_formatted(session:AsyncSession, mysql_query:str):
     """This function executes the query against the database and fetch results"""
     try:
         logger.info("Executing query against the database")
@@ -56,7 +56,7 @@ async def orchestrator(user_query:str , session:AsyncSession, chosen_db:str | No
     fetched_query_prompt=get_query_prompt(user_query=user_query, db_schema=fetched_db_schema, target_db=chosen_db)
     fetched_query=await get_query(queryprompt=fetched_query_prompt)
     validated_sql=query_validation(mysql_query=fetched_query)
-    data=await get_data(session=session,mysql_query=validated_sql)
+    data=await get_data_formatted(session=session,mysql_query=validated_sql)
     logger.info("----WORKFLOW EXECUTED SUCCESSFULLY----")
     return data
 
