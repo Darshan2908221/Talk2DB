@@ -7,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 # "sqlcoder-7b"
+"""
 model=ChatOllama(
     model=configured_attributes().MODEL_NAME,
     keep_alive="2m",
@@ -14,6 +15,7 @@ model=ChatOllama(
     top_p=0.9,
     num_predict=500
 )
+"""
 
 """
 models_v2=[

@@ -71,7 +71,7 @@ query_input = st.text_area(
 # Execution Button
 col1, _ = st.columns([1, 4])
 with col1:
-    run_btn = st.button("Generate & Run", type="primary", use_container_width=True)
+    run_btn = st.button("Generate & Run", type="primary", width="content")
 
 st.divider()
 
