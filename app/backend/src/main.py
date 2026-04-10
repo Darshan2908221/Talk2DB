@@ -38,7 +38,7 @@ def health_check():
     }
 
 #Creator
-@app.get("/creator")
+@app.get("/developer")
 def creator():
     return{
         "APP_Creator":"Darshan Rajeev Naik",

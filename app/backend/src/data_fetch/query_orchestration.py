@@ -11,35 +11,88 @@ from backend.src.data_fetch.prompts import get_table_prompt, get_query_prompt
 from backend.src.data_fetch.db_schema import get_table_schema, get_db_schema
 from backend.src.data_fetch.llms import get_tables, get_query
 from backend.src.data_fetch.sql_guard import query_validation
+from backend.src.data_fetch.businessmetrics import get_capacity_billed_hours, get_nps_score, get_internal_utilization
 from sqlalchemy.ext.asyncio import AsyncSession
 from decimal import Decimal
 from datetime import datetime, date
 import asyncio
 import time
+import pandas as pd
+import json
 
-async def get_data_formatted(session:AsyncSession, mysql_query:str):
+class REQUIREDCOLUMNSNOTFOUND(Exception):
+    pass
+
+class CAPACITYBILLEDHOUR(Exception):
+    pass
+
+
+async def get_data_formatted(session:AsyncSession, user_query:str, mysql_query:str):
     """This function executes the query against the database and fetch results"""
     try:
         logger.info("Executing query against the database")
         data=await session.execute(text(mysql_query))
         logger.info("Query executed and result are fetched successfully")
         mapped_data=data.mappings().all()
-        data_rows=[]
-        for row in mapped_data:
-            clean_rows:dict={}
-            for key, value in row.items():
-                if isinstance(value,Decimal):
-                    clean_rows[key]=float(value)
-                elif isinstance(value, (datetime, date)):
-                    clean_rows[key]=value.isoformat()
-                else:
-                    clean_rows[key]=value
-            data_rows.append(clean_rows)
-        return {
-            "mysql_query":mysql_query,
-            "data":data_rows,
-            "row_count":len(data_rows)
+        # data_rows=[]
+        # for row in mapped_data:
+        #     clean_rows:dict={}
+        #     for key, value in row.items():
+        #         if isinstance(value,Decimal):
+        #             clean_rows[key]=float(value)
+        #         elif isinstance(value, (datetime, date)):
+        #             clean_rows[key]=value.isoformat()
+        #         else:
+        #             clean_rows[key]=value
+        #     data_rows.append(clean_rows)
+        data_framed=pd.DataFrame(data=mapped_data)
+        if data_framed.empty:
+            return {
+                "mysql_query":mysql_query,
+                "data":[],
+                "row_count":0
+            }
+        
+        required_columns={"sRole","sDesignation","sBilledHours","sAttendanceCapacityForWastage","sNps"} 
+        target_phrases=["Utilization Internal", "Utilisation Client", "Capacity Billed Hour", "NPS Score"]
+        # business_metrics_results:{}
+
+        try:
+            if required_columns.issubset(data_framed.columns) and any(phrase.upper() in user_query.upper() for phrase in target_phrases):
+                logger.info("All required columns found. Calculating metrics...")
+                capacity_billed_hours_results=get_capacity_billed_hours(data_framed_ip=data_framed, 
+                                                                        user_query_ip=user_query
+                                                                        )  
+                NPS_rating_results=get_nps_score(data_framed_ip=data_framed)
+                internal_utilization_results=get_internal_utilization(data_framed_ip=data_framed)
+                logger.info("Business metrics calculated successfully")
+                
+                data_framed_json=data_framed.to_json(orient="records", date_format="iso")
+                data_framed_dict=json.loads(data_framed_json)
+                return {
+                    "mysql_query":mysql_query,
+                    # "data":data_framed_dict,
+                    "row_count":len(data_framed_dict),
+                    "Capacity_Billed_Hours":capacity_billed_hours_results,
+                    "NPS_rating":NPS_rating_results,
+                    "Internal_Utilization":internal_utilization_results
+                }
+            else:
+                data_framed_json=data_framed.to_json(orient="records", date_format="iso")
+                data_framed_dict=json.loads(data_framed_json)
+                return {
+                    "mysql_query":mysql_query,
+                    # "data":data_rows,
+                    "data":data_framed_dict,
+                    # "row_count":len(data_rows)
+                    "row_count":len(data_framed_dict),
+                    # "data_framed":data_framed,
+                    # "data_framed_json":data_framed_json
         }
+        except Exception as e:
+            logger.exception("Error in Metrics calculation or data conversion: %s",e)
+            raise
+        
     except Exception as e:
         logger.exception("Error in executing query against database: %s",e)
         raise
@@ -56,7 +109,7 @@ async def orchestrator(user_query:str , session:AsyncSession, chosen_db:str | No
     fetched_query_prompt=get_query_prompt(user_query=user_query, db_schema=fetched_db_schema, target_db=chosen_db)
     fetched_query=await get_query(queryprompt=fetched_query_prompt)
     validated_sql=query_validation(mysql_query=fetched_query)
-    data=await get_data_formatted(session=session,mysql_query=validated_sql)
+    data=await get_data_formatted(session=session, user_query=user_query, mysql_query=validated_sql)
     logger.info("----WORKFLOW EXECUTED SUCCESSFULLY----")
     return data
 
@@ -64,18 +117,25 @@ if __name__=="__main__":
     async def main():
         try:
             async with AsyncSessionLocal() as session:
-                for i in range(1,3):
-                    print(f"EXECUTION ROUND {i}")
+                i=1
+                # for i in range(1,2):
+                    # print(f"EXECUTION ROUND {i}")
+                while i:
                     start_time=time.time()
-                    result=await orchestrator(
-                        user_query="List all employees whose salary is greater than 15000",
-                        session=session,
-                        chosen_db="hr"
-                        )
-                    print("\n")
-                    print(result)
-                    print(f"Total_Time_Taken:{round((time.time()-start_time),3)}")
-                    print("\n")
+                    user_ip=input("USER:")
+                    if not user_ip.lower()=="exit":
+                        result=await orchestrator(
+                            # user_query="List all employees whose salary is greater than 15000",
+                            user_query=user_ip,
+                            session=session,
+                            chosen_db="enventure"
+                            )
+                        print("\n")
+                        print(result)
+                        print(f"Total_Time_Taken:{round((time.time()-start_time),3)}")
+                        print("\n")
+                    else:
+                        i=0       
         except Exception as e:
             print("Error Message:",e)
         finally:
@@ -85,6 +145,8 @@ if __name__=="__main__":
     asyncio.run(main())
 
 # python -m backend.src.data_fetch.query_orchestration
+
+#NORMAL DICT CONVERSIOn
 """
 2026-02-25 20:22:32,200-logtalk2db-INFO-MainThread-:starting env variales configuration
 2026-02-25 20:22:32,206-logtalk2db-INFO-MainThread-configured variables successfully
@@ -136,6 +198,57 @@ EXECUTION ROUND 2
 {'mysql_query': 'SELECT * FROM hr.employees WHERE salary > 15000', 'data': [{'employee_id': 100, 'first_name': 'Steven', 'last_name': 'King', 'email': 'SKING', 'phone_number': '515.123.4567', 'hire_date': '1987-06-17', 'job_id': 'AD_PRES', 'salary': 24000.0, 'commission_pct': None, 'manager_id': None, 'department_id': 90}, {'employee_id': 101, 'first_name': 'Neena', 'last_name': 'Kochhar', 'email': 'NKOCHHAR', 'phone_number': '515.123.4568', 'hire_date': '1989-09-21', 'job_id': 'AD_VP', 'salary': 17000.0, 'commission_pct': None, 'manager_id': 100, 'department_id': 90}, {'employee_id': 102, 'first_name': 'Lex', 'last_name': 'De Haan', 'email': 'LDEHAAN', 'phone_number': '515.123.4569', 'hire_date': '1993-01-13', 'job_id': 'AD_VP', 'salary': 17000.0, 'commission_pct': None, 'manager_id': 100, 'department_id': 90}], 'row_count': 3}
 Total_Time_Taken:3.19
 
+
 """
+#USING PANDAS + Additional check 
+"""
+2026-04-05 13:41:00,098-logtalk2db-INFO-MainThread-:starting env variales configuration
+2026-04-05 13:41:00,105-logtalk2db-INFO-MainThread-configured variables successfully
+EXECUTION ROUND 1
+2026-04-05 13:41:06,543-logtalk2db-INFO-MainThread-----STARTING WORKFLOW----
+2026-04-05 13:41:06,543-logtalk2db-INFO-MainThread-Trigering functions to build table schema
+2026-04-05 13:41:06,610-logtalk2db-INFO-MainThread-Table Schema built successfully
+2026-04-05 13:41:06,612-logtalk2db-INFO-MainThread-Invoking table prompt
+2026-04-05 13:41:06,631-logtalk2db-INFO-MainThread-Table Prompt ready, its now a prompt value
+2026-04-05 13:41:06,631-logtalk2db-INFO-MainThread-Invoking tables generation model
+2026-04-05 13:41:09,974-logtalk2db-INFO-MainThread-tables generation model provided response successfully
+2026-04-05 13:41:09,974-logtalk2db-INFO-MainThread-Triggering functions to build db_schema
+2026-04-05 13:41:09,993-logtalk2db-INFO-MainThread-db_schema built successfully
+2026-04-05 13:41:09,994-logtalk2db-INFO-MainThread-Invoking query prompt
+2026-04-05 13:41:09,994-logtalk2db-INFO-MainThread-Query prompt ready, It's now a prompt value
+2026-04-05 13:41:09,994-logtalk2db-INFO-MainThread-Invoking query generation model
+2026-04-05 13:41:11,406-logtalk2db-INFO-MainThread-query generation model provided response successfully
+2026-04-05 13:41:11,406-logtalk2db-INFO-MainThread-SQL validation started
+2026-04-05 13:41:11,409-logtalk2db-INFO-MainThread-SQL Query is validated SELECT * FROM hr.employees WHERE salary > 15000
+2026-04-05 13:41:11,409-logtalk2db-INFO-MainThread-Executing query against the database
+2026-04-05 13:41:11,409-logtalk2db-INFO-MainThread-Query executed and result are fetched successfully
 
 
+2026-04-05 13:41:11,415-logtalk2db-INFO-MainThread-----WORKFLOW EXECUTED SUCCESSFULLY----
+{'mysql_query': 'SELECT * FROM hr.employees WHERE salary > 15000', 'data': [{'commission_pct': None, 'department_id': 90, 'email': 'SKING', 'employee_id': 100, 'first_name': 'Steven', 'hire_date': '1987-06-17T00:00:00.000', 'job_id': 'AD_PRES', 'last_name': 'King', 'manager_id': None, 'phone_number': '515.123.4567', 'salary': 24000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'NKOCHHAR', 'employee_id': 101, 'first_name': 'Neena', 'hire_date': '1989-09-21T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'Kochhar', 'manager_id': 100.0, 'phone_number': '515.123.4568', 'salary': 17000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'LDEHAAN', 'employee_id': 102, 'first_name': 'Lex', 'hire_date': '1993-01-13T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'De Haan', 'manager_id': 100.0, 'phone_number': '515.123.4569', 'salary': 17000.0}], 'row_count': 3}
+Total_Time_Taken:4.876
+
+
+EXECUTION ROUND 2
+2026-04-05 13:41:11,419-logtalk2db-INFO-MainThread-----STARTING WORKFLOW----
+2026-04-05 13:41:11,419-logtalk2db-INFO-MainThread-Trigering functions to build table schema
+2026-04-05 13:41:11,419-logtalk2db-INFO-MainThread-Invoking table prompt
+2026-04-05 13:41:11,419-logtalk2db-INFO-MainThread-Table Prompt ready, its now a prompt value
+2026-04-05 13:41:11,419-logtalk2db-INFO-MainThread-Invoking tables generation model
+2026-04-05 13:41:13,116-logtalk2db-INFO-MainThread-tables generation model provided response successfully
+2026-04-05 13:41:13,116-logtalk2db-INFO-MainThread-Triggering functions to build db_schema
+2026-04-05 13:41:13,123-logtalk2db-INFO-MainThread-db_schema built successfully
+2026-04-05 13:41:13,129-logtalk2db-INFO-MainThread-Invoking query prompt
+2026-04-05 13:41:13,129-logtalk2db-INFO-MainThread-Query prompt ready, It's now a prompt value
+2026-04-05 13:41:13,129-logtalk2db-INFO-MainThread-Invoking query generation model
+2026-04-05 13:41:14,711-logtalk2db-INFO-MainThread-query generation model provided response successfully
+2026-04-05 13:41:14,711-logtalk2db-INFO-MainThread-SQL validation started
+2026-04-05 13:41:14,711-logtalk2db-INFO-MainThread-SQL Query is validated SELECT * FROM hr.employees WHERE salary > 15000
+2026-04-05 13:41:14,711-logtalk2db-INFO-MainThread-Executing query against the database
+2026-04-05 13:41:14,716-logtalk2db-INFO-MainThread-Query executed and result are fetched successfully
+
+
+2026-04-05 13:41:14,719-logtalk2db-INFO-MainThread-----WORKFLOW EXECUTED SUCCESSFULLY----
+{'mysql_query': 'SELECT * FROM hr.employees WHERE salary > 15000', 'data': [{'commission_pct': None, 'department_id': 90, 'email': 'SKING', 'employee_id': 100, 'first_name': 'Steven', 'hire_date': '1987-06-17T00:00:00.000', 'job_id': 'AD_PRES', 'last_name': 'King', 'manager_id': None, 'phone_number': '515.123.4567', 'salary': 24000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'NKOCHHAR', 'employee_id': 101, 'first_name': 'Neena', 'hire_date': '1989-09-21T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'Kochhar', 'manager_id': 100.0, 'phone_number': '515.123.4568', 'salary': 17000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'LDEHAAN', 'employee_id': 102, 'first_name': 'Lex', 'hire_date': '1993-01-13T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'De Haan', 'manager_id': 100.0, 'phone_number': '515.123.4569', 'salary': 17000.0}], 'row_count': 3}
+Total_Time_Taken:3.303
+"""
