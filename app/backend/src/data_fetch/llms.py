@@ -1,7 +1,8 @@
 #This module provides the LLM models to interact with
 # from langchain_ollama import ChatOllama
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from backend.src.utils.app_logger import logger
-from backend.src.data_fetch.prompts import SchemaFiltrationModel, QueryModel
+from backend.src.data_fetch.prompts import ConversationalModel, SchemaFiltrationModel, QueryModel, FinalResponseModel
 from backend.src.core.config import configured_attributes
 from langchain_google_genai import ChatGoogleGenerativeAI
 import asyncio
@@ -36,8 +37,21 @@ genai_model=ChatGoogleGenerativeAI(model="gemini-2.5-flash",
 
 # table_generation_model=model.with_structured_output(schema=SchemaFiltrationModel)
 # query_generation_model=model.with_structured_output(schema=QueryModel)
+conversation_model=genai_model.with_structured_output(schema=ConversationalModel)
 table_generation_model=genai_model.with_structured_output(schema=SchemaFiltrationModel)
 query_generation_model=genai_model.with_structured_output(schema=QueryModel)
+final_response_model=genai_model.with_structured_output(schema=FinalResponseModel)
+
+async def get_conversation(conversation_prompt):
+   """This function invoke llm and provide its reponse i.e Answer to user question or 1 if content not available to answer the question"""
+   try:
+      logger.info("Invoking conversation model")
+      response=await conversation_model.ainvoke(input=conversation_prompt)
+      logger.info("Conversational model provided response successfully")
+      return response.reply
+   except Exception as e:
+      logger.exception("Error while invoking Conversational Model: %s",e)
+      raise
 
 async def get_tables(tableprompt):
    """This function invoke llm and provide its response i.e tables"""
@@ -61,8 +75,18 @@ async def get_query(queryprompt):
       logger.exception("Error while invoking query generation model: %s",e)
       raise
     
+async def get_final_summary(summary_prompt):
+   """This function invoke llm and provide summary of the data"""
+   try:
+      logger.info("Invoking Final response model")
+      response=await final_response_model.ainvoke(input=summary_prompt)
+      logger.info("Final response model invoked successfully")
+      return response.reply
+   except Exception as e:
+      logger.exception("Error while invoking Final response model: %s", e)
+      raise
 
-#to unload from ram
+#To unload from ram
 """
 curl http://localhost:11434/api/generate -d '{
   "model": "sqlcoder-7b",
@@ -107,6 +131,26 @@ if __name__=="__main__":
    except Exception as e:
       print("----ERROR MESSAGE----")
    
+   try:
+      async def main_conversation():
+         conversationprompt_normal="""
+         2026-04-12 11:26:10,264-logtalk2db-INFO-MainThread-Invoking conversational_propmpt_template
+         Conversational_prompt_value: messages=[SystemMessage(content='Act as a normal conversational patner and helpful assistant.\n    The provided CHAT_HISTORY contains the current conversation. \n    The VERY LAST message is the new User Query. \n    Firstly, understand the intent of the question wheather they are seeking \n    data from database or its a normal question.\n    If you can answer the user question from the chathistory provided below or\n    from your general knowledge then give a professional, concise response.\n    else,\n    if the question requires extra knowledge that is data from database then \n    just reply 1, I mean strictly 1, Do NOT explain your choice. Do NOT say "I think the answer is 1" just reply with 1', additional_kwargs={}, response_metadata={}), HumanMessage(content="CHAT_HISTORY:[('human', 'List employees and their reporting managers')]", additional_kwargs={}, response_metadata={})]"""
+         response=await get_conversation(conversation_prompt=conversationprompt_normal)
+         print("AI Response:",response,sep="\n")
+         """
+         AI Response:
+         Hello!
+         AI Response:
+         Kangchenjunga is the highest peak in India.
+         AI Response:
+         1
+         AI Response:
+         1
+         """
+   except Exception as e:
+      print("----ERROR MESSAGE----")
+
 # asyncio.run(main_tablefetch())
-   asyncio.run(main_querygenerate())
+   asyncio.run(main_conversation())
    

@@ -7,12 +7,13 @@ userquery=>get_table_schema=>get_table_prompt=>get_tables=>=>get_db_schema=>get_
 from sqlalchemy import text
 from backend.src.utils.app_logger import logger
 from backend.src.db_connect.connection import AsyncSessionLocal, engine
-from backend.src.data_fetch.prompts import get_table_prompt, get_query_prompt
+from backend.src.data_fetch.prompts import get_table_prompt, get_query_prompt, get_conversational_prompt, get_final_sumarizer_prompt
 from backend.src.data_fetch.db_schema import get_table_schema, get_db_schema
-from backend.src.data_fetch.llms import get_tables, get_query
+from backend.src.data_fetch.llms import get_tables, get_query, get_conversation, get_final_summary
 from backend.src.data_fetch.sql_guard import query_validation
 from backend.src.data_fetch.businessmetrics import get_capacity_billed_hours, get_nps_score, get_internal_utilization
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from decimal import Decimal
 from datetime import datetime, date
 import asyncio
@@ -27,30 +28,26 @@ class CAPACITYBILLEDHOUR(Exception):
     pass
 
 
-async def get_data_formatted(session:AsyncSession, user_query:str, mysql_query:str):
+async def get_data_formatted(user_query:str, session:AsyncSession, mysql_query:str):
     """This function executes the query against the database and fetch results"""
     try:
         logger.info("Executing query against the database")
         data=await session.execute(text(mysql_query))
         logger.info("Query executed and result are fetched successfully")
         mapped_data=data.mappings().all()
-        # data_rows=[]
-        # for row in mapped_data:
-        #     clean_rows:dict={}
-        #     for key, value in row.items():
-        #         if isinstance(value,Decimal):
-        #             clean_rows[key]=float(value)
-        #         elif isinstance(value, (datetime, date)):
-        #             clean_rows[key]=value.isoformat()
-        #         else:
-        #             clean_rows[key]=value
-        #     data_rows.append(clean_rows)
         data_framed=pd.DataFrame(data=mapped_data)
+        csv_datafile=data_framed.to_csv(
+            index=False,
+            encoding="utf-8",
+        )
         if data_framed.empty:
             return {
                 "mysql_query":mysql_query,
                 "data":[],
-                "row_count":0
+                "sample_data":json.dumps("No smaple data available"),
+                "row_count":0,
+                "business_metrics":"No specific business metrics were calculated for this request",
+                "csv_file":str(csv_datafile)
             }
         
         required_columns={"sRole","sDesignation","sBilledHours","sAttendanceCapacityForWastage","sNps"} 
@@ -69,25 +66,34 @@ async def get_data_formatted(session:AsyncSession, user_query:str, mysql_query:s
                 
                 data_framed_json=data_framed.to_json(orient="records", date_format="iso")
                 data_framed_dict=json.loads(data_framed_json)
+                sample_data_sliced_dict=data_framed_dict[:10]
+                sample_data_sliced_json=json.dumps(sample_data_sliced_dict)
+
                 return {
                     "mysql_query":mysql_query,
-                    # "data":data_framed_dict,
+                    "data":data_framed_dict,
+                    "sample_data":sample_data_sliced_json,
                     "row_count":len(data_framed_dict),
+                    "csv_file":str(csv_datafile),
+                    "business_metrics":{
                     "Capacity_Billed_Hours":capacity_billed_hours_results,
                     "NPS_rating":NPS_rating_results,
                     "Internal_Utilization":internal_utilization_results
                 }
+                }
+            
             else:
                 data_framed_json=data_framed.to_json(orient="records", date_format="iso")
                 data_framed_dict=json.loads(data_framed_json)
+                sample_data_sliced_dict=data_framed_dict[:10]
+                sample_data_sliced_json=json.dumps(sample_data_sliced_dict)
                 return {
                     "mysql_query":mysql_query,
-                    # "data":data_rows,
                     "data":data_framed_dict,
-                    # "row_count":len(data_rows)
+                    "sample_data":sample_data_sliced_json,
                     "row_count":len(data_framed_dict),
-                    # "data_framed":data_framed,
-                    # "data_framed_json":data_framed_json
+                    "csv_file":str(csv_datafile),
+                    "business_metrics":"No specific business metrics were calculated for this request"
         }
         except Exception as e:
             logger.exception("Error in Metrics calculation or data conversion: %s",e)
@@ -99,50 +105,72 @@ async def get_data_formatted(session:AsyncSession, user_query:str, mysql_query:s
     finally:
         await session.close()
 
-async def orchestrator(user_query:str , session:AsyncSession, chosen_db:str | None=None):
+# chat_history:list[BaseMessage]
+
+async def orchestrator(user_query:str, session:AsyncSession, chat_history:list[BaseMessage], chosen_db:str | None=None):
     """This function creates the flow of execution"""
     logger.info("----STARTING WORKFLOW----")
-    fetched_table_schema=await get_table_schema(target_db=chosen_db)
-    fetched_table_prompt=get_table_prompt(user_query=user_query,target_db=chosen_db,table_schema=fetched_table_schema)
-    fetched_tables=await get_tables(tableprompt=fetched_table_prompt)
-    fetched_db_schema=await get_db_schema(table_names=fetched_tables, target_db=chosen_db)
-    fetched_query_prompt=get_query_prompt(user_query=user_query, db_schema=fetched_db_schema, target_db=chosen_db)
-    fetched_query=await get_query(queryprompt=fetched_query_prompt)
-    validated_sql=query_validation(mysql_query=fetched_query)
-    data=await get_data_formatted(session=session, user_query=user_query, mysql_query=validated_sql)
+    fetched_conversational_prompt=get_conversational_prompt(chat_history=chat_history)
+    fetched_conversation=await get_conversation(conversation_prompt=fetched_conversational_prompt)
+    if fetched_conversation==1 or fetched_conversation== "1":
+        fetched_table_schema=await get_table_schema(target_db=chosen_db)
+        fetched_table_prompt=get_table_prompt(chat_history=chat_history,target_db=chosen_db,table_schema=fetched_table_schema)
+        fetched_tables=await get_tables(tableprompt=fetched_table_prompt)
+        fetched_db_schema=await get_db_schema(table_names=fetched_tables, target_db=chosen_db)
+        fetched_query_prompt=get_query_prompt(chat_history=chat_history, db_schema=fetched_db_schema, target_db=chosen_db)
+        fetched_query=await get_query(queryprompt=fetched_query_prompt)
+        validated_sql=query_validation(mysql_query=fetched_query)
+        data=await get_data_formatted(user_query=user_query, session=session, mysql_query=validated_sql)
+        summary_promptvalue=get_final_sumarizer_prompt(business_metrics=data["business_metrics"], chat_history=chat_history, total_records=data["row_count"], sample_data=data["sample_data"])
+        final_response2user=await get_final_summary(summary_prompt=summary_promptvalue)
+        logger.info("----WORKFLOW EXECUTED SUCCESSFULLY----")
+        result_fields={"mysql_query":data["mysql_query"],
+                       "data200":data["data"][:200],
+                       "row_count":data["row_count"],
+                       "business_metrics":data["business_metrics"],
+                       "csv_file":data["csv_file"],
+                       "ai_msg":final_response2user}
+        return result_fields 
+
     logger.info("----WORKFLOW EXECUTED SUCCESSFULLY----")
-    return data
+    result_fields={"mysql_query":None,
+                       "data200":None,
+                       "row_count":None,
+                       "business_metrics":None,
+                       "csv_file":" ",
+                       "ai_msg":fetched_conversation}
+    return result_fields 
 
-if __name__=="__main__":
-    async def main():
-        try:
-            async with AsyncSessionLocal() as session:
-                i=1
-                # for i in range(1,2):
-                    # print(f"EXECUTION ROUND {i}")
-                while i:
-                    start_time=time.time()
-                    user_ip=input("USER:")
-                    if not user_ip.lower()=="exit":
-                        result=await orchestrator(
-                            # user_query="List all employees whose salary is greater than 15000",
-                            user_query=user_ip,
-                            session=session,
-                            chosen_db="enventure"
-                            )
-                        print("\n")
-                        print(result)
-                        print(f"Total_Time_Taken:{round((time.time()-start_time),3)}")
-                        print("\n")
-                    else:
-                        i=0       
-        except Exception as e:
-            print("Error Message:",e)
-        finally:
-            await engine.dispose()
+# if __name__=="__main__":
+#     async def main():
+#         try:
+#             async with AsyncSessionLocal() as session:
+#                 i=1
+#                 # for i in range(1,2):
+#                     # print(f"EXECUTION ROUND {i}")
+#                 while i:
+#                     start_time=time.time()
+#                     user_ip=input("USER:")
+#                     if not user_ip.lower()=="exit":
+#                         result=await orchestrator(
+#                             # user_query="List all employees whose salary is greater than 15000",
+#                             user_query=user_ip,
+#                             session=session,
+#                             chosen_db="enventure"
+#                             )
+#                         print("\n")
+#                         print(result)
+#                         print(f"Total_Time_Taken:{round((time.time()-start_time),3)}")
+#                         print("\n")
+#                     else:
+#                         i=0       
+#         except Exception as e:
+#             print("Error Message:",e)
+#         finally:
+#             await engine.dispose()
 
-    
-    asyncio.run(main())
+
+    # asyncio.run(main())
 
 # python -m backend.src.data_fetch.query_orchestration
 
@@ -252,3 +280,36 @@ EXECUTION ROUND 2
 {'mysql_query': 'SELECT * FROM hr.employees WHERE salary > 15000', 'data': [{'commission_pct': None, 'department_id': 90, 'email': 'SKING', 'employee_id': 100, 'first_name': 'Steven', 'hire_date': '1987-06-17T00:00:00.000', 'job_id': 'AD_PRES', 'last_name': 'King', 'manager_id': None, 'phone_number': '515.123.4567', 'salary': 24000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'NKOCHHAR', 'employee_id': 101, 'first_name': 'Neena', 'hire_date': '1989-09-21T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'Kochhar', 'manager_id': 100.0, 'phone_number': '515.123.4568', 'salary': 17000.0}, {'commission_pct': None, 'department_id': 90, 'email': 'LDEHAAN', 'employee_id': 102, 'first_name': 'Lex', 'hire_date': '1993-01-13T00:00:00.000', 'job_id': 'AD_VP', 'last_name': 'De Haan', 'manager_id': 100.0, 'phone_number': '515.123.4569', 'salary': 17000.0}], 'row_count': 3}
 Total_Time_Taken:3.303
 """
+
+#chatbot
+# python -m backend.src.data_fetch.query_orchestration
+
+if __name__=="__main__":
+    async def main(target_db:str):
+        chat_history:list[BaseMessage]=[]
+        i=1
+        while i:
+            try:
+                user_que=input("user:")
+                if not user_que.upper()=="EXIT":
+                    hm=HumanMessage(content=user_que)
+                    chat_history.append(hm)
+                    async with AsyncSessionLocal() as session:
+                        result=await orchestrator(user_query=user_que, session=session, chosen_db=target_db, chat_history=chat_history)
+                        print("AI:",result["ai_msg"])
+                        chat_history.append(AIMessage(content=result["ai_msg"]))
+                else:
+                    print("Thank you! Happy to assist you")
+                    print(chat_history)
+                    i=0
+            except Exception as e:
+                print("Chat_history:",chat_history, e,sep="\n")
+                raise
+
+
+    asyncio.run(main(target_db="enventure"))
+    
+                
+
+    
+        

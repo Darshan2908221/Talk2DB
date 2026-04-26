@@ -1,6 +1,8 @@
 import asyncio
 import pandas as pd
+import numpy as np
 from backend.src.utils.app_logger import logger
+
 #Capacity Billed Hour Calculation
 def get_capacity_billed_hours(data_framed_ip:pd.DataFrame, user_query_ip:str):
     """This function calculates the capacity billed hours using target billed hours and AttendaceCapacityForWastage"""
@@ -10,7 +12,7 @@ def get_capacity_billed_hours(data_framed_ip:pd.DataFrame, user_query_ip:str):
                              "Manager":0, 
                              "Senior Engineer":11.5, 
                              "Engineer":9, 
-                             "Graduate Engineering Trainee":6.5
+                             "Graduate Engineer Trainee":6.5
                              }
     try:
         data_framed_ip["cTarget_Billed_Hours"]=data_framed_ip["sRole"].map(target_billed_hours_map).fillna(0)
@@ -42,6 +44,9 @@ def get_internal_utilization(data_framed_ip:pd.DataFrame):
     logger.info("Initialising Internal Utilization Calculation...")
     try:
         data_framed_ip["cBilled_Hour_Capacity"]=data_framed_ip["sAttendanceCapacityForWastage"]*data_framed_ip["cTarget_Billed_Hours"]
+        data_framed_ip["cUtilization_internal"]=np.where(
+            data_framed_ip["sClientName"].str.strip().str.upper()!="ENVENTURE", 
+            round((data_framed_ip["sBilledHours"] / data_framed_ip["cBilled_Hour_Capacity"]) * 100, 2),0)
         total_billed_hours=data_framed_ip.loc[data_framed_ip["sClientName"].fillna(" ").str.strip().str.upper()!="ENVENTURE", "sBilledHours"].sum()
         total_billed_hours_capacity=data_framed_ip.loc[~data_framed_ip["sRole"].fillna("").str.strip().str.upper().isin(["MANAGER","DISCIPLINE HEAD","DISCIPLINE LEAD"]), "cBilled_Hour_Capacity"].sum()
         cumulative_Utilization_Internal=round(float((total_billed_hours/total_billed_hours_capacity)*100),2)
@@ -52,5 +57,9 @@ def get_internal_utilization(data_framed_ip:pd.DataFrame):
         # raise
         return ("ERROR MESSAGE:Error in calculating Internal Utilization")
     
+
+    
+
+
 
 
