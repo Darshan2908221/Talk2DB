@@ -1,562 +1,852 @@
-# import streamlit as st
-# import requests
-# import os
-# import pandas as pd
-# from langchain_core.messages import AIMessage, HumanMessage
+# import re
+# import uuid
 # from datetime import date
 
-# # --- 1. CONFIG & SETUP ---
+# import pandas as pd
+# import requests
+# import streamlit as st
+
+# # ---------- CONFIGURATION ----------
 # BACKEND_URL = "http://127.0.0.1:8000/sql"
+# USER_ID = 5452
+# UPLOAD_DATABASE = "useruploads"
 
 # st.set_page_config(
 #     page_title="TALK2DB",
-#     page_icon="🗣️",
-#     layout="wide"
+#     page_icon="DB",
+#     layout="wide",
 # )
 
-# # --- 2. SESSION STATE INITIALIZATION ---
-# # CRITICAL: We only initialize these if they don't exist yet
-# if "chat_history" not in st.session_state:
-#     st.session_state.chat_history = []
 
-# if "last_result" not in st.session_state:
-#     # We store the last API response here to keep Tab 2 populated
-#     st.session_state.last_result = None
+# # ---------- API FUNCTIONS ----------
 
-# # --- 3. DATABASE FETCHING ---
 # @st.cache_data(ttl=600)
 # def get_databases():
 #     try:
 #         response = requests.get(f"{BACKEND_URL}/databases", timeout=10)
 #         response.raise_for_status()
 #         return response.json()
-#     except Exception as e:
-#         st.sidebar.warning("Using default DB. Backend unreachable.")
-#         return [os.getenv("DB_NAME", "hr")]
+#     except Exception:
+#         return ["No database found"]
 
-# fetched_databases = get_databases()
 
-# # --- 4. SIDEBAR UI ---
-# with st.sidebar:
-#     st.title("Talk2DB_Menu")
-#     tab1, tab2 = st.tabs(["DB_Selection", "Output_Fields"])
-    
-#     with tab1:
-#         selected_db = st.selectbox(
-#             label="Target_DB", 
-#             options=fetched_databases, 
-#             help="Select the database you want to interact with.",
-#             placeholder="Select Database"
+# def get_database_options():
+#     database_options = list(get_databases())
+#     if "No database found" in database_options:
+#         return database_options
+#     if UPLOAD_DATABASE not in database_options:
+#         database_options.append(UPLOAD_DATABASE)
+#     return database_options
+
+
+# def get_database_catalog(p_refresh: bool = False):
+#     try:
+#         response = requests.get(
+#             f"{BACKEND_URL}/database_catalog",
+#             params={"refresh": p_refresh},
+#             timeout=30,
 #         )
-        
-#         if st.button("Clear Chat History", use_container_width=True):
-#             st.session_state.chat_history = []
-#             st.session_state.last_result = None
-#             st.rerun()
-            
+#         response.raise_for_status()
+#         return response.json()
+#     except Exception:
+#         return {}
+
+
+# def get_database_names(p_user_id: int):
+#     try:
+#         response = requests.get(f"{BACKEND_URL}/db_name/{p_user_id}", timeout=5)
+#         response.raise_for_status()
+#         return response.json()
+#     except Exception:
+#         return {}
+
+
+# def get_chatnames(p_user_id: int):
+#     try:
+#         response = requests.get(f"{BACKEND_URL}/chatnames/{p_user_id}", timeout=5)
+#         response.raise_for_status()
+#         return response.json()
+#     except Exception:
+#         return {}
+
+
+# def get_chathistory(p_user_id: int, p_chat_id: str):
+#     payload = {"user_id": p_user_id, "chat_id": p_chat_id}
+#     try:
+#         response = requests.post(f"{BACKEND_URL}/chat_history", json=payload, timeout=10)
+#         response.raise_for_status()
+#         return response.json()
+#     except Exception:
+#         return []
+
+
+# def normalize_table_name(p_table_name: str):
+#     table_name = re.sub(r"[^a-zA-Z0-9]+", "_", str(p_table_name)).strip("_").lower()
+#     if not table_name:
+#         table_name = "uploaded_file"
+#     if table_name[0].isdigit():
+#         table_name = f"file_{table_name}"
+#     return table_name[:50]
+
+
+# def upload_user_file(p_user_id: int, p_chat_id: str, p_database: str, p_uploaded_file):
+#     file_type = p_uploaded_file.name.rsplit(".", 1)[-1].lower()
+#     table_name = normalize_table_name(p_uploaded_file.name.rsplit(".", 1)[0])
+#     files = {
+#         "file": (
+#             p_uploaded_file.name,
+#             p_uploaded_file.getvalue(),
+#             p_uploaded_file.type or "application/octet-stream",
+#         )
+#     }
+#     data = {
+#         "user_id": str(p_user_id),
+#         "chat_id": p_chat_id,
+#         "database": p_database,
+#         "table_name": table_name,
+#         "file_type": file_type,
+#     }
+#     response = requests.post(f"{BACKEND_URL}/upload_file", data=data, files=files, timeout=60)
+#     response.raise_for_status()
+#     return response.json()
+
+
+# def insert_conversation(
+#     p_user_id: int,
+#     p_chat_id: str,
+#     p_chat_name: str,
+#     p_database: str,
+#     p_role: str,
+#     p_message: str,
+#     p_sql_query: str = "null",
+# ):
+#     payload = {
+#         "user_id": p_user_id,
+#         "chat_id": p_chat_id,
+#         "chat_name": p_chat_name,
+#         "database": p_database,
+#         "role": p_role,
+#         "message": str(p_message),
+#         "sql_query": str(p_sql_query),
+#     }
+#     response = requests.post(f"{BACKEND_URL}/insert_conversation", json=payload, timeout=10)
+#     response.raise_for_status()
+#     return response.json()
+
+
+# def delete_chathistory(p_user_id: int, p_chat_id: str):
+#     payload = {"user_id": p_user_id, "chat_id": p_chat_id}
+#     response = requests.delete(f"{BACKEND_URL}/delete_chathistory", json=payload, timeout=10)
+#     response.raise_for_status()
+#     return response.json()
+
+
+# def has_csv_result(p_result: dict):
+#     return bool(str(p_result.get("csv_file", "")).strip())
+
+
+# def render_csv_download(p_result: dict, p_key: str):
+#     if has_csv_result(p_result):
+#         st.download_button(
+#             label="Download CSV",
+#             data=p_result.get("csv_file", ""),
+#             file_name=f"talk2db_result_{date.today()}.csv",
+#             mime="text/csv",
+#             key=p_key,
+#         )
+
+
+# # ---------- SESSION STATE INITIALIZATION ----------
+
+# if "chat_sessions" not in st.session_state:
+#     st.session_state.chat_sessions = {}
+
+# if "chat_namings" not in st.session_state:
+#     st.session_state.chat_namings = get_chatnames(p_user_id=USER_ID)
+
+# if "db_names" not in st.session_state:
+#     st.session_state.db_names = get_database_names(p_user_id=USER_ID)
+
+# if "naming_mode" not in st.session_state:
+#     st.session_state.naming_mode = False
+
+# if "upload_mode" not in st.session_state:
+#     st.session_state.upload_mode = False
+
+# if "temp_db_name" not in st.session_state:
+#     st.session_state.temp_db_name = "Yet to select"
+
+# if "conv_manager" not in st.session_state:
+#     st.session_state.conv_manager = []
+
+# if "database_catalog" not in st.session_state:
+#     st.session_state.database_catalog = {}
+
+
+# # ---------- SIDEBAR UI ----------
+
+# chat_id = st.session_state.get("chat_selector")
+
+# with st.sidebar:
+#     st.title("DBNavigator")
+
+#     active_chat_id = st.session_state.get("chat_selector")
+#     if not active_chat_id and st.session_state.chat_namings:
+#         active_chat_id = list(st.session_state.chat_namings.keys())[0]
+#         st.session_state.chat_selector = active_chat_id
+
+#     if active_chat_id:
+#         st.session_state.temp_db_name = st.session_state.db_names.get(
+#             active_chat_id,
+#             "NO DATABASE ASSOCIATED",
+#         )
+
+#     tab1, tab2 = st.tabs(["Workflows", "Metrics"])
+
+#     with tab1:
+#         st.subheader("Workflow Manager")
+#         st.write("Target Database")
+#         st.info(st.session_state.temp_db_name)
+
+#         with st.expander("Database Scan"):
+#             if st.button("Refresh Scan", key="refresh_database_scan"):
+#                 get_databases.clear()
+#                 st.session_state.database_catalog = get_database_catalog(p_refresh=True)
+#             elif not st.session_state.database_catalog:
+#                 st.session_state.database_catalog = get_database_catalog(p_refresh=False)
+
+#             if st.session_state.database_catalog:
+#                 scanned_databases = sorted(st.session_state.database_catalog.keys())
+#                 st.caption(f"{len(scanned_databases)} databases scanned")
+#                 selected_catalog_db = st.selectbox(
+#                     "Database",
+#                     options=scanned_databases,
+#                     key="catalog_database_selector",
+#                 )
+#                 selected_schema = st.session_state.database_catalog.get(selected_catalog_db, {})
+#                 if "error" in selected_schema:
+#                     st.warning(selected_schema["error"])
+#                 else:
+#                     st.caption(f"{len(selected_schema)} tables found")
+#                     for table_name, table_schema in selected_schema.items():
+#                         columns = table_schema.get("columns", {})
+#                         st.markdown(f"**{table_name}** ({len(columns)} columns)")
+#                         st.caption(", ".join(columns.keys()) or "No columns found")
+#             else:
+#                 st.caption("No database metadata available.")
+
 #         st.divider()
-#         st.success(f"Connected: **{selected_db}**")
-#         st.info("API Status: **Online**")
+
+#         if st.button("New Chat"):
+#             st.session_state.naming_mode = True
+#             st.session_state.upload_mode = False
+
+#         if st.button("Upload File"):
+#             st.session_state.upload_mode = True
+#             st.session_state.naming_mode = False
+#             st.session_state.temp_db_name = UPLOAD_DATABASE
+
+#         if st.session_state.naming_mode:
+#             selected_db = st.selectbox("Select Target Database", options=get_database_options())
+#             st.session_state.temp_db_name = selected_db
+
+#             new_name = st.text_input("Enter Chat Name", key="new_chat_input")
+#             if new_name:
+#                 new_id = str(uuid.uuid4())
+#                 st.session_state.chat_namings[new_id] = new_name
+#                 st.session_state.db_names[new_id] = st.session_state.temp_db_name
+#                 st.session_state.chat_sessions[new_id] = []
+#                 st.session_state.chat_selector = new_id
+#                 st.session_state.naming_mode = False
+#                 st.rerun()
+
+#         if st.session_state.upload_mode:
+#             st.info(f"Target Database: {UPLOAD_DATABASE}")
+#             uploaded_files_for_new_chat = st.file_uploader(
+#                 label="Upload CSV or Excel files",
+#                 accept_multiple_files=True,
+#                 type=["csv", "xlsx"],
+#                 key="new_upload_chat_files",
+#             )
+#             upload_chat_name = st.text_input("Enter Chat Name", key="new_upload_chat_name")
+
+#             if uploaded_files_for_new_chat:
+#                 st.caption(
+#                     "Tables: "
+#                     + ", ".join(
+#                         normalize_table_name(uploaded_file.name.rsplit(".", 1)[0])
+#                         for uploaded_file in uploaded_files_for_new_chat
+#                     )
+#                 )
+
+#             if st.button("Create Upload Chat", key="create_upload_chat"):
+#                 if not upload_chat_name.strip():
+#                     st.warning("Please enter a chat name.")
+#                 elif not uploaded_files_for_new_chat:
+#                     st.warning("Please upload at least one file.")
+#                 else:
+#                     new_id = str(uuid.uuid4())
+#                     upload_results = []
+#                     with st.spinner("Uploading files..."):
+#                         try:
+#                             for uploaded_file in uploaded_files_for_new_chat:
+#                                 upload_results.append(
+#                                     upload_user_file(
+#                                         p_user_id=USER_ID,
+#                                         p_chat_id=new_id,
+#                                         p_database=UPLOAD_DATABASE,
+#                                         p_uploaded_file=uploaded_file,
+#                                     )
+#                                 )
+
+#                             uploaded_tables = ", ".join(
+#                                 result.get("table_name", "uploaded_file")
+#                                 for result in upload_results
+#                             )
+#                             upload_message = f"Uploaded tables: {uploaded_tables}"
+#                             insert_conversation(
+#                                 p_user_id=USER_ID,
+#                                 p_chat_id=new_id,
+#                                 p_chat_name=upload_chat_name.strip(),
+#                                 p_database=UPLOAD_DATABASE,
+#                                 p_role="assistant",
+#                                 p_message=upload_message,
+#                             )
+
+#                             st.session_state.chat_namings[new_id] = upload_chat_name.strip()
+#                             st.session_state.db_names[new_id] = UPLOAD_DATABASE
+#                             st.session_state.chat_sessions[new_id] = [
+#                                 {"role": "assistant", "message": upload_message}
+#                             ]
+#                             st.session_state.chat_selector = new_id
+#                             st.session_state.temp_db_name = UPLOAD_DATABASE
+#                             st.session_state.upload_mode = False
+#                             st.session_state.database_catalog = get_database_catalog(p_refresh=True)
+#                             st.success(f"Uploaded successfully: {uploaded_tables}")
+#                             st.rerun()
+#                         except Exception as e:
+#                             st.error(f"File upload failed: {e}")
+
+#         st.divider()
+#         st.markdown("Your Conversations")
+
+#         if st.session_state.chat_namings:
+#             if st.session_state.get("chat_selector") not in st.session_state.chat_namings:
+#                 st.session_state.chat_selector = list(st.session_state.chat_namings.keys())[0]
+
+#             chat_id = st.radio(
+#                 "Select a Chat",
+#                 options=list(st.session_state.chat_namings.keys()),
+#                 format_func=lambda x: str(st.session_state.chat_namings.get(x, "Untitled")),
+#                 key="chat_selector",
+#             )
+
+#             if chat_id in st.session_state.db_names:
+#                 st.session_state.temp_db_name = st.session_state.db_names.get(
+#                     chat_id,
+#                     "NO DATABASE ASSOCIATED",
+#                 )
+
+#             if st.button("Delete Chat History", key=f"delete_chathistory_{chat_id}"):
+#                 try:
+#                     delete_chathistory(USER_ID, chat_id)
+#                     st.session_state.chat_sessions.pop(chat_id, None)
+#                     st.session_state.chat_namings.pop(chat_id, None)
+#                     st.session_state.db_names.pop(chat_id, None)
+#                     st.session_state.chat_namings = get_chatnames(p_user_id=USER_ID)
+#                     st.session_state.db_names = get_database_names(p_user_id=USER_ID)
+#                     st.success("Chat history deleted successfully.")
+#                     st.rerun()
+#                 except Exception as e:
+#                     st.error(f"An error occurred while deleting chat history: {e}")
+
+#             if st.session_state.temp_db_name == UPLOAD_DATABASE:
+#                 st.divider()
+#                 st.markdown("Add More Files")
+#                 st.caption(f"Files are stored as tables in the {UPLOAD_DATABASE} database.")
+#                 uploaded_files = st.file_uploader(
+#                     label="Upload CSV or Excel files",
+#                     accept_multiple_files=True,
+#                     type=["csv", "xlsx"],
+#                     key=f"file_uploader_{chat_id}",
+#                 )
+#                 if uploaded_files:
+#                     st.caption(
+#                         "Tables: "
+#                         + ", ".join(
+#                             normalize_table_name(uploaded_file.name.rsplit(".", 1)[0])
+#                             for uploaded_file in uploaded_files
+#                         )
+#                     )
+#                     if st.button("Upload Files", key=f"upload_files_{chat_id}"):
+#                         upload_results = []
+#                         with st.spinner("Uploading files..."):
+#                             try:
+#                                 for uploaded_file in uploaded_files:
+#                                     upload_results.append(
+#                                         upload_user_file(
+#                                             p_user_id=USER_ID,
+#                                             p_chat_id=chat_id,
+#                                             p_database=UPLOAD_DATABASE,
+#                                             p_uploaded_file=uploaded_file,
+#                                         )
+#                                     )
+#                                 uploaded_tables = ", ".join(
+#                                     result.get("table_name", "uploaded_file")
+#                                     for result in upload_results
+#                                 )
+#                                 upload_message = f"Uploaded tables: {uploaded_tables}"
+#                                 insert_conversation(
+#                                     p_user_id=USER_ID,
+#                                     p_chat_id=chat_id,
+#                                     p_chat_name=st.session_state.chat_namings[chat_id],
+#                                     p_database=UPLOAD_DATABASE,
+#                                     p_role="assistant",
+#                                     p_message=upload_message,
+#                                 )
+#                                 st.session_state.chat_sessions.setdefault(chat_id, []).append(
+#                                     {"role": "assistant", "message": upload_message}
+#                                 )
+#                                 st.session_state.database_catalog = get_database_catalog(p_refresh=True)
+#                                 st.success(f"Uploaded successfully: {uploaded_tables}")
+#                                 st.rerun()
+#                             except Exception as e:
+#                                 st.error(f"File upload failed: {e}")
+
+#             if chat_id and chat_id not in st.session_state.chat_sessions:
+#                 with st.spinner("Syncing messages..."):
+#                     st.session_state.chat_sessions[chat_id] = get_chathistory(USER_ID, chat_id)
+#             elif chat_id and not st.session_state.chat_sessions.get(chat_id):
+#                 st.write("NO CHATHISTORY AVAILABLE FOR THIS CHAT")
+#         else:
+#             st.info("No active workflows.")
 
 #     with tab2:
-#         # We only show data if a query has been successfully run
-#         if st.session_state.last_result:
-#             res = st.session_state.last_result
-#             st.metric("Rows Found", res.get("row_count", 0))
-            
-#             with st.expander("Generated SQL"):
-#                 st.code(res.get("mysql_query", ""), language="sql")
-            
-#             with st.expander("Business Metrics"):
-#                 st.write(res.get("business_metrics", "No metrics available"))
-            
-#             with st.expander("Raw Data View"):
-#                 if res.get("data200"):
-#                     df = pd.DataFrame(res["data200"])
-#                     st.dataframe(df)
-#                 else:
-#                     st.write("No data returned.")
+#         st.header("Metrics")
+#         if st.session_state.conv_manager:
+#             last_res = st.session_state.conv_manager[-1]
+#             st.metric("Rows Impacted", last_res.get("row_count", 0))
+#             with st.expander("View SQL Query"):
+#                 st.code(last_res.get("mysql_query", ""), language="sql")
+#             with st.expander("Analysis", expanded=True):
+#                 st.write(last_res.get("business_metrics", "No analysis provided."))
+#             render_csv_download(last_res, "sidebar_download_csv")
+#             if last_res.get("data200"):
+#                 st.dataframe(pd.DataFrame(last_res["data200"]))
 #         else:
-#             st.write("Perform a query to see details here.")
+#             st.caption("Execute a query to see performance metrics.")
 
-# # --- 5. MAIN CHAT INTERFACE ---
-# st.title("Talk2DB Dashboard")
 
-# # Display previous messages
-# for message in st.session_state.chat_history:
-#     role = "user" if isinstance(message, HumanMessage) else "assistant"
-#     with st.chat_message(role):
-#         st.markdown(message.content)
+# # ---------- MAIN CHAT AREA ----------
 
-# # Chat Input Logic
-# if user_input := st.chat_input("Enter your query..."):
-#     # 1. Immediately show user message and save to state
+# if chat_id:
+#     for msg in st.session_state.chat_sessions.get(chat_id, []):
+#         with st.chat_message(msg["role"]):
+#             st.markdown(msg["message"])
+# else:
+#     st.info("Create or select a chat to begin.")
+
+# if st.session_state.conv_manager:
+#     latest_result = st.session_state.conv_manager[-1]
+#     st.divider()
+#     st.subheader("Latest Result")
+#     render_csv_download(latest_result, "main_download_csv")
+#     if latest_result.get("data200"):
+#         st.dataframe(pd.DataFrame(latest_result["data200"]))
+
+# query = st.chat_input("Enter your query...", disabled=not bool(chat_id))
+
+# if query and chat_id:
+#     current_chat_name = st.session_state.chat_namings[chat_id]
+#     current_database = st.session_state.db_names.get(chat_id, st.session_state.temp_db_name)
+
 #     with st.chat_message("user"):
-#         st.markdown(user_input)
-#     st.session_state.chat_history.append(HumanMessage(content=user_input))
+#         st.markdown(query)
 
-#     # 2. Call Backend
-#     with st.spinner("Analyzing database..."):
-#         try:
+#     st.session_state.chat_sessions.setdefault(chat_id, []).append(
+#         {"role": "user", "message": query}
+#     )
+
+#     try:
+#         insert_conversation(
+#             p_user_id=USER_ID,
+#             p_chat_id=chat_id,
+#             p_chat_name=current_chat_name,
+#             p_database=current_database,
+#             p_role="user",
+#             p_message=query,
+#         )
+
+#         with st.spinner("Getting answer for you..."):
 #             payload = {
-#                 "user_query": user_input,
-#                 "database": selected_db
+#                 "database": current_database,
+#                 "user_id": USER_ID,
+#                 "chat_id": chat_id,
+#                 "user_query": query,
+#                 "chat_history": st.session_state.chat_sessions[chat_id],
 #             }
-            
-#             response = requests.post(f"{BACKEND_URL}/ask", json=payload, timeout=45)
+#             response = requests.post(f"{BACKEND_URL}/ask", json=payload, timeout=120)
 #             response.raise_for_status()
-#             result = response.json()
+#             result_data = response.json()
+#             st.session_state.conv_manager.append(result_data)
 
-#             # 3. Save result for Tab 2 and History
-#             st.session_state.last_result = result
-#             ai_response = result.get("ai_msg", "No response received.")
-            
-#             with st.chat_message("assistant"):
-#                 st.markdown(ai_response)
-            
-#             st.session_state.chat_history.append(AIMessage(content=ai_response))
-            
-#             # Optional: Rerun to refresh the Sidebar (Tab 2) metrics immediately
-#             st.rerun()
+#             assistant_message = str(result_data.get("ai_msg", "No response generated."))
+#             st.session_state.chat_sessions[chat_id].append(
+#                 {"role": "assistant", "message": assistant_message}
+#             )
 
-#         except Exception as e:
-#             st.error(f"Error connecting to backend: {e}")
+#             insert_conversation(
+#                 p_user_id=USER_ID,
+#                 p_chat_id=chat_id,
+#                 p_chat_name=current_chat_name,
+#                 p_database=current_database,
+#                 p_role="assistant",
+#                 p_message=assistant_message,
+#                 p_sql_query=str(result_data.get("mysql_query")),
+#             )
 
-# # --- 6. FOOTER ---
+#         with st.chat_message("assistant"):
+#             st.markdown(st.session_state.chat_sessions[chat_id][-1]["message"])
+#         render_csv_download(result_data, f"query_download_csv_{len(st.session_state.conv_manager)}")
+#         st.rerun()
+#     except Exception as e:
+#         st.error(f"Failed to communicate with backend: {e}")
+
+
+# # ---------- FOOTER ----------
 # st.divider()
 # st.caption(f"Project: Talk2DB | Developer: Darshan Rajeev Naik | {date.today()} | Emp_Code: 5452")
 
 
 
-
-
-
-
-
-
-
-#Chat History
-#Graph
-#Table correction
-#prompt changes
-
-
-
-
-'''
-
-#Imports
-import streamlit as st
-from datetime import date
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
+import re
 import uuid
-import requests
-
-#BACKEND URL
-BACKEND_URL = "http://127.0.0.1:8000/sql"
-
-# ----------MAIN UI----------
-
-#Pagesetup
-st.set_page_config(
-    page_title="TALK2DB",
-    page_icon="🗣️",
-    layout="wide"
-)
-
-
-#Database calls
-
-#Get Databases
-@st.cache_data(ttl=600)
-def get_databases():
-    """This function fetches the database"""
-    try:
-        response=requests.get(f"{BACKEND_URL}/databases", timeout=20)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.sidebar.warning("Backend Unreachable or no databases")
-        return ["No database"]
-        
-#Get Database function call
-databases=get_databases()
-
-#Get chathistory
-def get_chathistory(p_user_id:int, p_session_id:str):
-    payload=dict(user_id=p_user_id, session_id=p_session_id)
-    try:
-        response=requests.post(f"{BACKEND_URL}/chat_history",json=payload)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.warning("Backend unreachable or missmatch in userid and sessionid")
-        return []
-
-#Get chatnames
-def get_chatnames(p_user_id:int):
-    try:
-        response=requests.get(f"{BACKEND_URL}/chatnames/{p_user_id}")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.warning("No previous conversations found")
-        return {}
-
-#Get chatnames and user_id
-
-
-
-# #Chatsessions and Chatnaming sessionstate
-# if "chat_sessions" not in st.session_state:
-#     st.session_state.chat_sessions={}
-
-# if "chat_namings" not in st.session_state:
-#     st.session_state.chat_sessions={}
-
-#Sidebar
-with st.sidebar:
-    st.header("DBNavigator")
-    tab1, tab2= st.tabs(["Tab1", "Tab2"])
-
-    #Tab1
-    with tab1:
-        st.header("Workflow Manager")
-
-        #Database selection
-        st.selectbox(
-            label="Target Database",
-            placeholder="Select database to interact with",
-            options=databases
-        )
-
-        #Initializing naming modes
-        if "chat_sessions" not in st.session_state:
-            st.session_state.chat_sessions = {}
-
-        if "chat_namings" not in st.session_state:
-            st.session_state.chat_namings = get_chatnames(p_user_id=5452)
-            st.session_state.initial_chatname_load=False
-
-        if "naming_mode" not in st.session_state:
-            st.session_state.naming_mode = False
-
-        if "chat_session_active" not in st.session_state:
-            st.session_state.chat_session_active=False
-                
-        #Conversations
-        if st.session_state.chat_namings:
-            session_id=st.radio("Your Conversations", 
-                                options=list(st.session_state.chat_namings.keys()),
-                                format_func=lambda x: str(st.session_state.chat_namings[x]))
-            if session_id:
-                # st.session_state.initial_chatname_load=True
-            #check wheather a session is available in chat_sessions
-                if session_id not in st.session_state.chat_sessions:
-                    st.session_state.chat_sessions[session_id]=get_chathistory(p_user_id=5452, p_session_id=session_id)
-                    st.session_state.chat_session_active=True
-        else:
-            st.write("No conversations yet start a new one")
-                
-
-        #New Chat Button
-        newchat_opted=st.button(label="Newchat")
-
-        if newchat_opted:
-            #Naming Creation
-            st.session_state.naming_mode=True
-            
-        if st.session_state.naming_mode:
-            chat_name=st.sidebar.text_input(label="Enter the chat name")
-
-            if chat_name:               
-                #Chat History Creation
-                new_chat_history:list[BaseMessage]=[]
-                thread_id=str(uuid.uuid4())
-                st.session_state["chat_sessions"][thread_id]=new_chat_history
-                st.session_state["chat_namings"][thread_id]=chat_name
-                st.session_state.naming_mode=False
-                st.rerun()
-
-    #Tab2
-    with tab2:
-        st.header("Metrics")
-
-        #Row Count
-        st.metric("Row Count", 1000, border=True)
-
-        #MySql Query
-        with st.expander(label="Mysql Query"):
-            st.code(body="select * from chat", language="sql")
-
-        #Business Metrics
-        with st.expander(label="Business Metrics", expanded=True):
-            st.write({"Utilization":"120%", "Billed hour":95})
-
-        #Generate Visualization
-        st.button("Generate Visualization")
-
-        #First 200 rows
-        with st.expander("Sample Data Below", expanded=True):
-            st.dataframe(data=[10,12,14,16,18])
-        
-
-
-
-#Chatinput
-st.chat_input(placeholder="Enter your query")
-for convo in st.session_state.chat_sessions["1dh"]:
-    with st.chat_message(name=convo["role"]):
-         st.markdown(convo["message"])
-
-
-
-
-
-#Footer
-st.divider()
-st.caption(f"Project: Talk2DB | Developer: Darshan Rajeev Naik | {date.today()} | Emp_Code: 5452")
-
-'''
-
-import streamlit as st
 from datetime import date
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
-import uuid
-import requests
 import pandas as pd
+import requests
+import streamlit as st
 
-# BACKEND URL
+# ---------- CONFIGURATION ----------
 BACKEND_URL = "http://127.0.0.1:8000/sql"
+USER_ID = 5452
+UPLOAD_DATABASE = "useruploads"
 
-# ---------- PAGE SETUP ----------
 st.set_page_config(
     page_title="TALK2DB",
-    page_icon="🗣️",
-    layout="wide"
+    page_icon="DB",
+    layout="wide",
 )
+
+# Global variables initialized to prevent NameErrors
+chat_id = None
 
 # ---------- API FUNCTIONS ----------
 
 @st.cache_data(ttl=600)
 def get_databases():
-    """Fetches list of databases for the dropdown."""
     try:
         response = requests.get(f"{BACKEND_URL}/databases", timeout=10)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
+    except Exception:
         return ["No database found"]
 
-def get_chatnames(p_user_id: int):
-    """Fetches the metadata (IDs and Names) for the sidebar."""
-    try:
-        response = requests.get(f"{BACKEND_URL}/chatnames/{p_user_id}")
-        response.raise_for_status()
-        return response.json()  # Returns {session_id: chat_name}
-    except Exception:
-        st.sidebar.warning("Issue in fetching chatnames")
-        return {}
+def get_database_options():
+    database_options = list(get_databases())
+    if "No database found" in database_options:
+        return database_options
+    if UPLOAD_DATABASE not in database_options:
+        database_options.append(UPLOAD_DATABASE)
+    return database_options
 
-def get_chathistory(p_user_id: int, p_session_id: str):
-    """Fetches actual messages for a specific session."""
-    # CRITICAL FIX: Use json=payload to match FastAPI Pydantic models
-    payload = {"user_id": p_user_id, "session_id": p_session_id}
+def get_database_catalog(p_refresh: bool = False):
     try:
-        response = requests.post(f"{BACKEND_URL}/chat_history", json=payload)
+        response = requests.get(
+            f"{BACKEND_URL}/database_catalog",
+            params={"refresh": p_refresh},
+            timeout=30,
+        )
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        st.sidebar.error(f"Failed to fetch history for {p_session_id}")
+    except Exception:
+        return {}
+
+def get_database_names(p_user_id: int):
+    try:
+        response = requests.get(f"{BACKEND_URL}/db_name/{p_user_id}", timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return {}
+
+def get_chatnames(p_user_id: int):
+    try:
+        response = requests.get(f"{BACKEND_URL}/chatnames/{p_user_id}", timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return {}
+
+def get_chathistory(p_user_id: int, p_chat_id: str):
+    payload = {"user_id": p_user_id, "chat_id": p_chat_id}
+    try:
+        response = requests.post(f"{BACKEND_URL}/chat_history", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
         return []
+
+def normalize_table_name(p_table_name: str):
+    table_name = re.sub(r"[^a-zA-Z0-9]+", "_", str(p_table_name)).strip("_").lower()
+    if not table_name:
+        table_name = "uploaded_file"
+    if table_name[0].isdigit():
+        table_name = f"file_{table_name}"
+    return table_name[:50]
+
+def upload_user_file(p_user_id: int, p_chat_id: str, p_database: str, p_uploaded_file):
+    file_type = p_uploaded_file.name.rsplit(".", 1)[-1].lower()
+    table_name = normalize_table_name(p_uploaded_file.name.rsplit(".", 1)[0])
+    files = {
+        "file": (
+            p_uploaded_file.name,
+            p_uploaded_file.getvalue(),
+            p_uploaded_file.type or "application/octet-stream",
+        )
+    }
+    data = {
+        "user_id": str(p_user_id),
+        "chat_id": p_chat_id,
+        "database": p_database,
+        "table_name": table_name,
+        "file_type": file_type,
+    }
+    response = requests.post(f"{BACKEND_URL}/upload_file", data=data, files=files, timeout=60)
+    response.raise_for_status()
+    return response.json()
+
+def insert_conversation(
+    p_user_id: int,
+    p_chat_id: str,
+    p_chat_name: str,
+    p_database: str,
+    p_role: str,
+    p_message: str,
+    p_sql_query: str = "null",
+):
+    payload = {
+        "user_id": p_user_id,
+        "chat_id": p_chat_id,
+        "chat_name": p_chat_name,
+        "database": p_database,
+        "role": p_role,
+        "message": str(p_message),
+        "sql_query": str(p_sql_query),
+    }
+    try:
+        response = requests.post(f"{BACKEND_URL}/insert_conversation", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return None
+
+def delete_chathistory(p_user_id: int, p_chat_id: str):
+    payload = {"user_id": p_user_id, "chat_id": p_chat_id}
+    response = requests.delete(f"{BACKEND_URL}/delete_chathistory", json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+def render_csv_download(p_result: dict, p_key: str):
+    csv_data = p_result.get("csv_file", "")
+    if csv_data and str(csv_data).strip():
+        st.download_button(
+            label="Download CSV",
+            data=csv_data,
+            file_name=f"talk2db_result_{date.today()}.csv",
+            mime="text/csv",
+            key=p_key,
+        )
 
 # ---------- SESSION STATE INITIALIZATION ----------
 
-if "chat_sessions" not in st.session_state:
-    st.session_state.chat_sessions = {}  # Stores {session_id: [messages]}
+if "chat_sessions" not in st.session_state: st.session_state.chat_sessions = {}
+if "chat_namings" not in st.session_state: st.session_state.chat_namings = get_chatnames(USER_ID)
+if "db_names" not in st.session_state: st.session_state.db_names = get_database_names(USER_ID)
+if "naming_mode" not in st.session_state: st.session_state.naming_mode = False
+if "upload_mode" not in st.session_state: st.session_state.upload_mode = False
+if "temp_db_name" not in st.session_state: st.session_state.temp_db_name = "Yet to select"
+if "conv_manager" not in st.session_state: st.session_state.conv_manager = []
+if "database_catalog" not in st.session_state: st.session_state.database_catalog = {}
+if "last_chat_id" not in st.session_state: st.session_state.last_chat_id = None
 
-if "chat_namings" not in st.session_state:
-    # Initial load of names from DB
-    st.session_state.chat_namings = get_chatnames(p_user_id=5452)    #Stores {"session_id":[chat_names]}
-
-if "naming_mode" not in st.session_state:
-    st.session_state.naming_mode = False
-
-if "conv_manager" not in st.session_state:
-    st.session_state.conv_manager=[]
 
 # ---------- SIDEBAR UI ----------
 
 with st.sidebar:
     st.title("DBNavigator")
+
+    active_chat_id = st.session_state.get("chat_selector")
+    if not active_chat_id and st.session_state.chat_namings:
+        active_chat_id = list(st.session_state.chat_namings.keys())[0]
+        st.session_state.chat_selector = active_chat_id
+
+    # LOGIC: Clear tabular data instantly when switching chats
+    if active_chat_id != st.session_state.last_chat_id:
+        st.session_state.conv_manager = []
+        st.session_state.last_chat_id = active_chat_id
+
+    if active_chat_id:
+        st.session_state.temp_db_name = st.session_state.db_names.get(
+            active_chat_id, "NO DATABASE ASSOCIATED"
+        )
+
     tab1, tab2 = st.tabs(["Workflows", "Metrics"])
 
     with tab1:
         st.subheader("Workflow Manager")
+        st.write("Target Database")
+        st.info(st.session_state.temp_db_name)
 
-        # Database Selection
-        databases = get_databases()
-        selected_db = st.selectbox(
-            label="Target Database",
-            options=databases,
-            placeholder="Select database"
-        )
+        with st.expander("Database Scan"):
+            if st.button("Refresh Scan"):
+                get_databases.clear()
+                st.session_state.database_catalog = get_database_catalog(p_refresh=True)
+            elif not st.session_state.database_catalog:
+                st.session_state.database_catalog = get_database_catalog(p_refresh=False)
+
+            if st.session_state.database_catalog:
+                scanned_dbs = sorted(st.session_state.database_catalog.keys())
+                selected_catalog_db = st.selectbox("Database", options=scanned_dbs)
+                schema = st.session_state.database_catalog.get(selected_catalog_db, {})
+                for table_name, table_schema in schema.items():
+                    st.markdown(f"**{table_name}**")
+                    st.caption(", ".join(table_schema.get("columns", {}).keys()))
 
         st.divider()
-        st.markdown("🗣️Your Conversations")
-        
-        # 1. RADIO BUTTONS: Selection logic
-        session_id = None
-        if st.session_state.chat_namings:
-            session_id = st.radio(
-                "Select a Chat",
-                options=list(st.session_state.chat_namings.keys()),
-                format_func=lambda x: str(st.session_state.chat_namings[x])
-            )
-            
-            # 2. LAZY LOADING: Fetch history only if it's not in memory
-            if session_id:
-                if session_id not in st.session_state.chat_sessions or not st.session_state.chat_sessions[session_id]:
-                    with st.spinner("Loading messages..."):
-                        history = get_chathistory(p_user_id=5452, p_session_id=session_id)
-                        st.session_state.chat_sessions[session_id] = history
-        else:
-            st.info("No conversations yet. Start a new one below!")
+        if st.button("New Chat"):
+            st.session_state.naming_mode, st.session_state.upload_mode = True, False
 
-        # 3. NEW CHAT LOGIC
-        if st.button("➕ New Chat"):
-            st.session_state.naming_mode = True
-        
+        if st.button("Upload File"):
+            st.session_state.upload_mode, st.session_state.naming_mode = True, False
+            st.session_state.temp_db_name = UPLOAD_DATABASE
+
         if st.session_state.naming_mode:
-            new_name = st.text_input("Enter Chat Name", key="new_chat_name_input")
+            selected_db = st.selectbox("Select Target Database", options=get_database_options())
+            new_name = st.text_input("Enter Chat Name")
             if new_name:
                 new_id = str(uuid.uuid4())
-                # Update both state dictionaries
                 st.session_state.chat_namings[new_id] = new_name
-                st.session_state.chat_sessions[new_id] = []
+                st.session_state.db_names[new_id] = selected_db
+                st.session_state.chat_selector = new_id
                 st.session_state.naming_mode = False
+                st.rerun()
+
+        if st.session_state.upload_mode:
+            uploaded_file_obj = st.file_uploader("Upload CSV or Excel", accept_multiple_files=False, type=["csv", "xlsx"])
+            upload_chat_name = st.text_input("Enter Chat Name")
+
+            if uploaded_file_obj:
+                # Wrapped in list to handle 'bytes' object vs 'UploadedFile' object logic
+                files_preview = [uploaded_file_obj]
+                st.caption("Tables: " + ", ".join([normalize_table_name(f.name.rsplit(".", 1)[0]) for f in files_preview]))
+
+            if st.button("Create Upload Chat") and upload_chat_name and uploaded_file_obj:
+                new_id = str(uuid.uuid4())
+                with st.spinner("Uploading..."):
+                    try:
+                        res = upload_user_file(USER_ID, new_id, UPLOAD_DATABASE, uploaded_file_obj)
+                        table_name = res.get("table_name", "uploaded_file")
+                        msg = f"Uploaded table: {table_name}"
+                        insert_conversation(USER_ID, new_id, upload_chat_name, UPLOAD_DATABASE, "assistant", msg)
+                        st.session_state.chat_namings[new_id] = upload_chat_name
+                        st.session_state.db_names[new_id] = UPLOAD_DATABASE
+                        st.session_state.chat_selector = new_id
+                        st.session_state.upload_mode = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
+
+        st.divider()
+        if st.session_state.chat_namings:
+            chat_id = st.radio(
+                "Select a Chat",
+                options=list(st.session_state.chat_namings.keys()),
+                format_func=lambda x: str(st.session_state.chat_namings.get(x, "Untitled")),
+                key="chat_selector",
+            )
+            if st.button("Delete Chat"):
+                delete_chathistory(USER_ID, chat_id)
+                st.session_state.chat_namings.pop(chat_id, None)
                 st.rerun()
 
     with tab2:
         st.header("Metrics")
         if st.session_state.conv_manager:
-            res = st.session_state.conv_manager[-1]
-            st.metric("Rows Found", res.get("row_count", 0))
-            
-            with st.expander("Generated SQL"):
-                st.code(res.get("mysql_query", ""), language="sql")
-            
-            with st.expander("Business Metrics", expanded=True):
-                st.write(res.get("business_metrics", "No metrics available"))
-            
-            with st.expander("Raw Data View First 200 rows"):
-                if res.get("data200"):
-                    df = pd.DataFrame(res["data200"])
-                    st.dataframe(df)
-                
-                else:
-                    st.write("No data returned.")
-
-            csv_file=st.download_button(
-                label="Download full data retrieved CSV",
-                data=res.get(
-                    "csv_file", "no_csv_file"),
-                    file_name="data.csv",
-                    mime="text/csv",
-                    icon=":material/download:"
-                    )   
-        
-        else:
-            st.write("Perform a query to see details here.")
-
+            last_res = st.session_state.conv_manager[-1]
+            st.metric("Rows Found", last_res.get("row_count", 0))
+            with st.expander("SQL Query"): st.code(last_res.get("mysql_query", ""), language="sql")
+            st.write(last_res.get("business_metrics", "No analysis available."))
+            if last_res.get("data200"): st.dataframe(pd.DataFrame(last_res["data200"]))
 
 # ---------- MAIN CHAT AREA ----------
 
-# Display existing messages for the selected session
-if session_id and session_id in st.session_state.chat_sessions:
-    chat_container = st.container()
-    with chat_container:
-        for convo in st.session_state.chat_sessions[session_id]:
-            role = convo.get("role", "assistant")
-            text_content = convo.get("message", "")
-            with st.chat_message(role):
-                st.markdown(text_content)
-
-# Chat Input
-query = st.chat_input("Enter your query...")
-
-if query and session_id:
-    # 1. Display user message immediately
-    with st.chat_message("user"):
-        st.markdown(query)
+if chat_id:
+    # Ensure session history is synced
+    if chat_id not in st.session_state.chat_sessions:
+        st.session_state.chat_sessions[chat_id] = get_chathistory(USER_ID, chat_id)
     
-    # 2. Appending to local session state
-    st.session_state.chat_sessions[session_id].append({"role": "user", "message": query})
+    # Render historical messages
+    for msg in st.session_state.chat_sessions.get(chat_id, []):
+        with st.chat_message(msg["role"]): st.markdown(msg["message"])
 
-    payload={
-        "user_id":5452,
-        "session_id":session_id,
-        "chat_name":st.session_state.chat_namings[session_id],
-        "role":"user", 
-        "message":str(query)
-    }
-        
-    # 3.Inserting Human message in database
-    response = requests.post(f"{BACKEND_URL}/insert_conversation", json=payload)
+    # Show result table in main screen for the current query
+    if st.session_state.conv_manager:
+        latest_result = st.session_state.conv_manager[-1]
+        st.divider()
+        st.subheader("Query Results")
+        render_csv_download(latest_result, "main_download")
+        if latest_result.get("data200"):
+            st.dataframe(pd.DataFrame(latest_result["data200"]))
+else:
+    st.info("Please select or create a chat to begin.")
 
-    #writing message to Main UI
-    # with st.chat_message(name="user"):
-        # st.markdown(st.session_state.chat_sessions[session_id][-1]["message"])
+# ---------- CHAT INPUT ----------
 
-    with st.spinner("Getting Answer for you..."):
+query = st.chat_input("Ask about your data...", disabled=not bool(chat_id))
 
-        #querying database
+if query and chat_id:
+    current_chat_name = st.session_state.chat_namings[chat_id]
+    current_database = st.session_state.db_names.get(chat_id, st.session_state.temp_db_name)
+
+    with st.chat_message("user"): st.markdown(query)
+    st.session_state.chat_sessions[chat_id].append({"role": "user", "message": query})
+    insert_conversation(USER_ID, chat_id, current_chat_name, current_database, "user", query)
+
+    with st.spinner("Talking to DB..."):
         try:
-            payload={"database":selected_db, "user_query":query, "chat_history":st.session_state.chat_sessions[session_id]}
-            response=requests.post(f"{BACKEND_URL}/ask", json=payload)
+            payload = {
+                "database": current_database,
+                "user_id": USER_ID,
+                "chat_id": chat_id,
+                "user_query": query,
+                "chat_history": st.session_state.chat_sessions[chat_id],
+            }
+            response = requests.post(f"{BACKEND_URL}/ask", json=payload, timeout=120)
             response.raise_for_status()
-            result_data=response.json()
-            st.session_state.conv_manager.append(result_data)
-
-            #Appending message to chatsession
-            st.session_state.chat_sessions[session_id].append({"role": "assistant", "message": result_data["ai_msg"]})
-            payload_ai={
-                "user_id":5452,
-                "session_id":session_id,
-                "chat_name":st.session_state.chat_namings[session_id],
-                "role":"assistant", 
-                "message":str(result_data["ai_msg"])
-                }
+            result_data = response.json()
             
-            # 3.Inserting AI message in database
-            response = requests.post(f"{BACKEND_URL}/insert_conversation", json=payload_ai)
-
-        
-        except Exception as e:
-            st.error(f"Failed to communicate with backend: {e}") 
-
-
-        #writing message to Main UI
-        with st.chat_message(name="assistant"):
-            st.markdown(st.session_state.chat_sessions[session_id][-1]["message"])
+            # Store only the latest result for tabular display
+            st.session_state.conv_manager = [result_data]
+            
+            ai_msg = result_data.get("ai_msg", "No answer provided.")
+            st.session_state.chat_sessions[chat_id].append({"role": "assistant", "message": ai_msg})
+            insert_conversation(USER_ID, chat_id, current_chat_name, current_database, "assistant", ai_msg, result_data.get("mysql_query"))
             st.rerun()
-
+        except Exception as e:
+            st.error(f"Backend Error: {e}")
 
 # ---------- FOOTER ----------
 st.divider()
 st.caption(f"Project: Talk2DB | Developer: Darshan Rajeev Naik | {date.today()} | Emp_Code: 5452")
 
-
-
-
-
-
-
-
-
-
-
-
-
-        
-# streamlit run frontend/main.py
+# streamlit run frontend\main.py

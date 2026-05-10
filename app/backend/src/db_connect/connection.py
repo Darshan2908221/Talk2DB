@@ -3,7 +3,7 @@ from backend.src.core.config import configured_attributes
 from backend.src.utils.app_logger import logger
 import asyncio
 
-#engine creation
+#engine creation i.e connecting to mysql database
 engine=create_async_engine(
     url=configured_attributes().db_url,
     pool_size=20,
@@ -29,6 +29,10 @@ async def get_session():
         except Exception as e:
             logger.exception("Error Message: %s",e)
             raise
+
+#Engine creation i.e to sqllite database
+
+
 
 if __name__=="__main__":
     async def main():

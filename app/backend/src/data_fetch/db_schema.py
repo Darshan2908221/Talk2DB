@@ -2,7 +2,8 @@
 from backend.src.core.config import configured_attributes
 from backend.src.utils.app_logger import logger
 from backend.src.db_connect.connection import engine
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import asyncio
 
@@ -42,6 +43,13 @@ async def get_databases()->List[str]:
     logger.info("Databases fetched successfully")
     return _databases_cache
 
+async def refresh_databases()->List[str]:
+    """Clears cached database names and scans MySQL again."""
+    global _databases_cache
+    async with _databases_lock:
+        _databases_cache=None
+    return await get_databases()
+
 _table_schema:dict={}
 _table_schema_lock=asyncio.Lock()
 
@@ -73,6 +81,22 @@ async def _fetch_table_schema(target_db:str)->dict:
             logger.info("Table Schema built successfully")
             return _table_schema[target_db]
         return await conn.run_sync(table_schema_build)    
+
+async def get_database_catalog(refresh: bool=False)->dict:
+    """Scans all non-system databases and returns tables with columns."""
+    if refresh:
+        databases=await refresh_databases()
+    else:
+        databases=await get_databases()
+
+    catalog={}
+    for database in databases:
+        try:
+            catalog.update(await get_table_schema(target_db=database))
+        except Exception as e:
+            logger.exception("Error while scanning database schema for %s: %s", database, e)
+            catalog[database]={"error": "Schema scan failed"}
+    return catalog
 
 
 '''
@@ -120,7 +144,25 @@ async def get_db_schema(table_names:list[str], target_db:str | None=None):
             # print(db_schema)
             return {target_db:db_schema}             
         return await conn.run_sync(db_schema_build)
-    
+
+
+#UPLOADS TABLE
+async def get_uploads_tables(user_id:int, target_db:str, session:AsyncSession, chat_id:str | None=None):
+    """This functions fetches the tables related to that user"""
+    try:
+        logger.info("Fetching tablenames from the useruploadsregistry database for the specific user")
+        if chat_id:
+            query=text("select table_name from useruploadsregistry.files_metadata where user_id=:u_id and chat_id=:ch_id")
+            parameters={"u_id":user_id, "ch_id":chat_id}
+        else:
+            query=text("select table_name from useruploadsregistry.files_metadata where user_id=:u_id")
+            parameters={"u_id":user_id}
+        result=await session.execute(statement=query, params=parameters)
+        tables=result.scalars().all()
+        return tables
+    except Exception as e:
+        return False
+
 
 if __name__=="__main__":
     async def main():
