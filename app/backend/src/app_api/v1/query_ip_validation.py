@@ -7,9 +7,9 @@ from langchain_core.messages import BaseMessage
 class UserInputValidation(BaseModel):
     user_query:Annotated[str, Field(..., examples=["Who are the top 5 highest paid employees?"], min_length=1, max_length=500, description="question to ask the database")]
     user_id:Annotated[int, Field(..., examples=[5458, 5641], description="User id of the user")]
-    chat_id:Annotated[str | None, Field(default=None, description="Chat id for uploaded-file workflows")]
-    database:Annotated[str, Field(default=configured_attributes().DB_NAME, description="The target database schema to query")]
-    chat_history:Annotated[List[Dict[str, str]], Field(..., description="This chat history contains conversation between user and AI over a database as a primary purpose")]
+    chat_id:Annotated[str, Field(..., description="Chat id for uploaded-file/created chat tab")]
+    database:Annotated[str, Field(..., description="The target database schema to query")]
+    chat_history:Annotated[List[Dict[str, str]], Field(..., description="This chat history contains conversation between user and AI over a database")]
 
 
 class ChatHistoryInputValidation(BaseModel):

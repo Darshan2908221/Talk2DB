@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, UploadFile
 from backend.src.db_connect.connection import engine, get_session
 from backend.src.data_fetch.query_orchestration import orchestrator, uploads_orchestrator
-from backend.src.data_fetch.db_schema import get_database_catalog, get_databases, refresh_databases
+from backend.src.data_fetch.db_schema import get_database_catalog, get_databases, refresh_databases, DBNotFoundError
 from backend.src.data_fetch.chat_history import get_database_names, get_chat, save_chathistory, get_chat_names, delete_chat
 from backend.src.data_fetch.tablecreation import datacleaning, delete_useruploads_metadata, normalize_table_name, save_to_useruploadsdb, save_useruploads_metadata
 from backend.src.utils.app_logger import logger
@@ -34,13 +34,16 @@ async def get_db(refresh: bool=False):
         else:
             databases=await get_databases()
         return databases
-    except HTTPException:
-        raise
+    except DBNotFoundError:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No datatbases found"
+        )
     except Exception as e:
         logger.exception("Failed to fetch database schemas %s",e)
         raise HTTPException(
             status_code=500, 
-            detail=f"Failed to fetch database schemas"
+            detail=f"Failed to fetch database schemas, Internal server error"
         )
 
 @data_router.get("/database_catalog")
@@ -48,6 +51,11 @@ async def scan_database_catalog(refresh: bool=False):
     """Scans all available databases and returns table/column metadata."""
     try:
         return await get_database_catalog(refresh=refresh)
+    except DBNotFoundError:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No datatbases found"
+        )
     except Exception as e:
         logger.exception("Failed to scan database catalog %s", e)
         raise HTTPException(status_code=500, detail="Failed to scan database catalog")
@@ -78,7 +86,7 @@ async def get_data(request:UserInputValidation, db_session:AsyncSession=Depends(
             logger.info("uploads_orchestrator worked successfully")
             
         else:
-            logger.info("Invoking uploads_orchestrator")
+            logger.info("Invoking Database_orchestrator")
             results=await orchestrator(
                 user_query=request.user_query,
                 chosen_db=request.database,

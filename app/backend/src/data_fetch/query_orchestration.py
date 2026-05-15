@@ -122,7 +122,7 @@ async def orchestrator(user_query:str, session:AsyncSession, chat_history:list[B
                 "row_count": 0,
                 "business_metrics": None,
                 "csv_file": " ",
-                "ai_msg": "It looks like you haven't uploaded any files yet. Please upload an Excel or CSV file to start chatting with your data!"
+                "ai_msg": "It looks like you haven't uploaded any files yet. Please upload an Excel or CSV file to start chatting with your data! or there may be no tables for the given database"
             }
         fetched_db_schema=await get_db_schema(table_names=fetched_tables, target_db=chosen_db)
         fetched_query_prompt=get_query_prompt(chat_history=chat_history, db_schema=fetched_db_schema, target_db=chosen_db)

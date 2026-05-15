@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     DB_NAME:Annotated[str,Field(default="hr",title="DB_NAME",description="Default database to interact")]
     MODEL_NAME:Annotated[str,Field(default="sqlcoder-7b", title="LLM", description="Default model to use to generate query")]
     GEMINI_API_KEY:Annotated[SecretStr,Field(..., title="API_key", description="API key to Interact with Gemini Models")]
-    SDB_NAME:Annotated[str,Field(..., title="SDB_NAME",description="Sqllite database to interact")]
 
     module_path:ClassVar[Path]=Path(__file__).resolve()
     root_path:ClassVar[Path]=module_path.parent.parent.parent.parent.parent

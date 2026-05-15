@@ -12,9 +12,10 @@ import json
 class ConversationalModel(BaseModel):
     reply:Annotated[str | int, Field("...", description="""
                                     DECISION LOGIC:
-                                    1. ANALYZE: Examine the last message which is the user query in CHAT_HISTORY.
+                                    1. ANALYZE: Examine the last message which is the new user query in CHAT_HISTORY.
                                     2. CHAT: If the query is a greeting, general knowledge, or can be answered using existing info in CHAT_HISTORY, provide a concise, professional response.
                                     3. DATABASE: If the query requires internal metrics (e.g., NPS, Utilization, Capacity, Employee data , etc..) NOT present in the chat history for the same question,
+                                    or if the question is seeking any sort of data from the database then
                                     return ONLY the integer 1.
                                     STRICT RULES:
                                     - No preambles (e.g., do NOT say 'I think the answer is...').
@@ -23,7 +24,8 @@ class ConversationalModel(BaseModel):
 #prompt to classify question
 conversational_prompt_template=ChatPromptTemplate([
     ("system", 
-    """Act as a normal conversational patner and helpful assistant.
+    """
+    Act as a normal conversational patner, query intent classifier and an helpful assistant.
     The provided CHAT_HISTORY contains the current conversation. 
     The VERY LAST message is the new User Query. 
     Firstly, understand the intent of the question wheather they are seeking 
@@ -32,31 +34,32 @@ conversational_prompt_template=ChatPromptTemplate([
     from your general knowledge then give a professional, concise response.
     else,
     if the question requires extra knowledge that is data from database then 
-    just reply 1, I mean strictly 1, Do NOT explain your choice. Do NOT say "I think the answer is 1" just reply with 1"""),
-    ("human",
-    """CHAT_HISTORY:{chat_history}""")
+    just reply 1, I mean strictly 1, Do NOT explain your choice. Do NOT say "I think the answer is 1" just reply with 1.
+    """),
+    ("""human,
+    CHAT_HISTORY:{chat_history}""")
 ])
 
 def get_conversational_prompt(chat_history:list[BaseMessage]):
-    logger.info("Invoking conversational_propmpt_template")
-    conv_pv=conversational_prompt_template.invoke(chat_history)
+    logger.info("Invoking conversational_prompt_template")
+    conv_pv=conversational_prompt_template.invoke(input={"chat_history":chat_history})
     logger.info("Table Prompt ready, its now a prompt value")
     return conv_pv
 
 #Pydantic model for the schema filtration response
 class SchemaFiltrationModel(BaseModel):
-    table_names:Annotated[list[str], Field(..., description="Shall include the tables required to write mysql query to get the data from database to answer user query", examples=["employees","countries"])]
-    # user_query:Annotated[str, Field(..., description="User Modified query")]
+    table_names:Annotated[list[str], Field(..., description="List of table names required to satisfy the user's request based on the DB_SCHEMA provided.")]
+                                           
 
 #prompt to filter schema and get tables
-table_prompt_template=ChatPromptTemplate([
+table_prompt_template=ChatPromptTemplate.from_messages([
     ("system", 
      """
      you are a database schema analyzer.
      Task: Select ONLY the tables required to answer the user query.
      The very last question or message in the chat history is the new user query, understand the context from chat history
      and select the tables required to answer the user query
-     Exception: <<If the user query includes fields such as Utilization Internal, Utilisation Client, Capacity Billed Hour, NPS Score
+     Exception: <<If the user query includes fields such as Utilization Internal, Utilisation Client, Capacity Billed Hour, NPS Score.
      these fields are to be calculated, not present directly in the database thus I mention below the column names from pulsedb table 
      that are required to calculate the above fields, therefore include pulsedb table name in response along with
      other table names that are required to answer the user query.
@@ -68,21 +71,18 @@ table_prompt_template=ChatPromptTemplate([
      - Do NOT invent tables.
      - Do NOT explain reasoning.
      """),
+    Mes
     ("human",
     """
-    CHAT_HISTORY:{chat_history}
     TARGET_DB:{target_db}
     DB_SCHEMA:{table_schema}
     """)])
 
-def get_table_prompt(chat_history:list[BaseMessage], table_schema:dict, target_db:str | None=None):
+def get_table_prompt(chat_history:list[BaseMessage], table_schema:dict, target_db:str):
     """This function provides the prompt for the schema filtration"""
-    if target_db is None:
-        target_db=configured_attributes().DB_NAME
     logger.info("Invoking table prompt")
     table_prompt_value=table_prompt_template.invoke(input=
                                                     {
-                                                        # "user_query":user_query,
                                                         "chat_history":chat_history,
                                                         "target_db":target_db,
                                                         "table_schema":table_schema
@@ -101,9 +101,8 @@ query_prompt_template = ChatPromptTemplate([
      You are an expert MySQL developer.
      Task:
      Generate a valid MySQL query that answers the user question.
-     The very last question in the chat_history is the new user query thus understand context and requirement
-     from the chat history and Generate a valid MySQL query that answers the user question which is the very last message or question in 
-     chat history.
+     The very last question in the chat_history is the new user query thus understand the context and requirement of the user query
+     from the chat history and Generate a valid MySQL query that answers the user question.
      Rules:
      - Use ONLY tables and columns present in DB_SCHEMA.
      - Follow MySQL syntax strictly.
@@ -143,12 +142,9 @@ query_prompt_template = ChatPromptTemplate([
 
 def get_query_prompt(chat_history:list[BaseMessage], db_schema:dict, target_db:str | None=None):
     """This function provides prompt to get the mysql query"""
-    if target_db is None:
-        target_db=configured_attributes().DB_NAME
     logger.info("Invoking query prompt")
     query_prompt_value=query_prompt_template.invoke(input=
                                                     {
-                                                        # "user_query":user_query,
                                                         "chat_history":chat_history,
                                                         "target_db":target_db,
                                                         "db_schema":db_schema
@@ -159,8 +155,6 @@ def get_query_prompt(chat_history:list[BaseMessage], db_schema:dict, target_db:s
 #pydantic model to summarize results
 class FinalResponseModel(BaseModel):
     reply: str = Field(..., description="The natural language summary of the data.")
-    # has_data: bool = Field(..., description="True if rows were found, False if empty.")
-    # csv_filename: Optional[str] = Field(None, description="The name of the generated file.")
 
 final_summarizer_prompt_template=ChatPromptTemplate([("system",
                     """

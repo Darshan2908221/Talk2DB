@@ -19,10 +19,13 @@ class DBNotFoundError(DBSchema):
 class TableNotFoundError(DBSchema):
     pass
 
-#get databases
+# get databases
 async def get_databases()->List[str]:
     """This function get databases from the database"""
     global _databases_cache
+    if _databases_cache is not None:
+        logger.info("Databases fetched successfully")
+        return _databases_cache
     async with _databases_lock:
         if _databases_cache is None:
             async with engine.connect() as conn:
@@ -37,10 +40,13 @@ async def get_databases()->List[str]:
                     if not _databases_cache:
                         _databases_cache=None
                         raise DBNotFoundError
+                    logger.info("Databases fetched successfully")
                 except DBNotFoundError:
                     logger.warning("No Database exists, Recheck!!")
-                    raise DBNotFoundError("No Database exists, Recheck!!")
-    logger.info("Databases fetched successfully")
+                    raise 
+                except Exception as e:
+                    logger.error("ERROR MESSAGE: %s",e)
+                    raise
     return _databases_cache
 
 async def refresh_databases()->List[str]:
@@ -52,35 +58,6 @@ async def refresh_databases()->List[str]:
 
 _table_schema:dict={}
 _table_schema_lock=asyncio.Lock()
-
-'''
-{db_name:{table_name:{columns:{column_name : column_type}}}}
-'''
-
-async def get_table_schema(target_db:str | None=None)->dict:
-    """ This function provides the table schema for the provided database"""
-    logger.info("Trigering functions to build table schema")
-    if target_db is None:
-        target_db=configured_attributes().DB_NAME
-    async with _table_schema_lock:
-        if target_db not in _table_schema:
-            await _fetch_table_schema(target_db)
-    return {target_db:_table_schema[target_db]}
-
-async def _fetch_table_schema(target_db:str)->dict:
-    async with engine.connect() as conn:
-        def table_schema_build(connection):
-            inspector=inspect(connection)
-            tables=inspector.get_table_names(schema=target_db)
-            local_schema_build={}
-            for table in tables:
-                local_schema_build[table]={}
-                columns= inspector.get_columns(schema=target_db, table_name=table)
-                local_schema_build[table]["columns"]={column["name"]:str(column["type"]) for column in columns}
-            _table_schema[target_db]=local_schema_build 
-            logger.info("Table Schema built successfully")
-            return _table_schema[target_db]
-        return await conn.run_sync(table_schema_build)    
 
 async def get_database_catalog(refresh: bool=False)->dict:
     """Scans all non-system databases and returns tables with columns."""
@@ -97,6 +74,35 @@ async def get_database_catalog(refresh: bool=False)->dict:
             logger.exception("Error while scanning database schema for %s: %s", database, e)
             catalog[database]={"error": "Schema scan failed"}
     return catalog
+
+
+'''
+{db_name:{table_name:{columns:{column_name : column_type}}}}
+'''
+
+async def get_table_schema(target_db:str)->dict:
+    """ This function provides the table schema for the provided database"""
+    logger.info("Trigering functions to build table schema")
+    if target_db not in _table_schema:
+        async with _table_schema_lock:
+            if target_db not in _table_schema:
+                await _fetch_table_schema(target_db)
+    return {target_db:_table_schema[target_db]}
+
+async def _fetch_table_schema(target_db:str)->dict:
+    async with engine.connect() as conn:
+        def table_schema_build(connection):
+            inspector=inspect(connection)
+            tables=inspector.get_table_names(schema=target_db)
+            local_schema_build={}
+            for table in tables:
+                local_schema_build[table]={}
+                columns= inspector.get_columns(schema=target_db, table_name=table)
+                local_schema_build[table]["columns"]={column["name"]:str(column["type"]) for column in columns}
+            return local_schema_build
+        built_table_schema= await conn.run_sync(table_schema_build)
+        _table_schema[target_db]=built_table_schema
+    logger.info("Table Schema built successfully")   
 
 
 '''
@@ -118,30 +124,27 @@ async def get_database_catalog(refresh: bool=False)->dict:
 }
 '''
     
-async def get_db_schema(table_names:list[str], target_db:str | None=None):
+async def get_db_schema(table_names:list[str], target_db:str):
     """ This function provides the db schema for the provided database and tables"""
-    if target_db is None:
-        target_db=configured_attributes().DB_NAME
     async with engine.connect() as conn:
         def tables_validation(fetched_table_names):           
             for table in table_names:
                 if table not in fetched_table_names:
-                    raise TableNotFoundError(f"Table: '{table}' not found in database: '{target_db}'")
+                    logger.error(f"Table: '{table}' not found in database: '{target_db}'")
+                    raise ValueError(f"Table '{table}' not found in database '{target_db}'")
 
         def db_schema_build(connection):
             logger.info("Triggering functions to build db_schema")
             inspector=inspect(connection)
             fetched_table_names=inspector.get_table_names(schema=target_db)
-            # fetched_table_names_set=set(fetched_table_names)
             tables_validation(fetched_table_names)
             db_schema={}
             for table in table_names:
                 db_schema[table]={}
                 db_schema[table]["columns"]={column["name"]:str(column["type"]) for column in inspector.get_columns(schema=target_db,table_name=table)}
-                db_schema[table]["primary_key"]=inspector.get_pk_constraint(schema=target_db, table_name=table)["constrained_columns"]
-                db_schema[table]["relations"]=[{"local_columns":fk["constrained_columns"],"referred_table":fk["referred_table"], "referred_columns":fk["referred_columns"]} for fk in inspector.get_foreign_keys(schema=target_db, table_name=table)]
+                db_schema[table]["primary_key"]=inspector.get_pk_constraint(schema=target_db, table_name=table).get(["constrained_columns"], [])
+                db_schema[table]["relations"]=[{"local_columns":fk.get(["constrained_columns"], []),"referred_table":fk.get(["referred_table"],[]), "referred_columns":fk.get(["referred_columns"])} for fk in inspector.get_foreign_keys(schema=target_db, table_name=table)]
             logger.info("db_schema built successfully")  
-            # print(db_schema)
             return {target_db:db_schema}             
         return await conn.run_sync(db_schema_build)
 

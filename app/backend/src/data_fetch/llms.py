@@ -35,8 +35,7 @@ models_v3=[
 genai_model=ChatGoogleGenerativeAI(model="gemini-2.5-flash",
                                    api_key=configured_attributes().GEMINI_API_KEY)
 
-# table_generation_model=model.with_structured_output(schema=SchemaFiltrationModel)
-# query_generation_model=model.with_structured_output(schema=QueryModel)
+# LLM Models with structured output
 conversation_model=genai_model.with_structured_output(schema=ConversationalModel)
 table_generation_model=genai_model.with_structured_output(schema=SchemaFiltrationModel)
 query_generation_model=genai_model.with_structured_output(schema=QueryModel)
